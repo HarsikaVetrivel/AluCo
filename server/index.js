@@ -4,6 +4,8 @@ const cors = require('cors');
 const jwt = require('jsonwebtoken');
 const bodyParser = require('body-parser');
 const bcrypt = require('bcrypt');
+const multer = require('multer');
+const path = require('path');
 
 const app = express();
 const PORT = 3001;
@@ -17,6 +19,21 @@ app.use(cors({
 }));
 app.use(express.json());
 app.use(bodyParser.json());
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
+
+// Multer setup for file uploads
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, 'uploads/');
+  },
+  filename: (req, file, cb) => {
+    const uniqueName = Date.now() + '-' + file.originalname;
+    cb(null, uniqueName);
+  }
+});
+const upload = multer({ storage });
 
 // MySQL Pool
 const pool = mysql.createPool({
@@ -42,35 +59,28 @@ const authenticateJWT = (req, res, next) => {
   }
 };
 
-// === Routes ===
-
-// 🌐 Test route
+// Routes
 app.get('/', (req, res) => {
   res.send('🌟 Server is running fine!');
 });
 
-// 🧑‍💼 Register
 app.post('/register', async (req, res) => {
   try {
     const { name, email, password, role, department, year_of_passing, current_position } = req.body;
-
     if (!name || !email || !password || !role) {
       return res.status(400).json({ message: 'Missing required fields' });
     }
-
     const connection = await pool.getConnection();
     const [existingUsers] = await connection.query('SELECT * FROM users WHERE email = ?', [email]);
     if (existingUsers.length > 0) {
       connection.release();
       return res.status(409).json({ message: 'User already exists' });
     }
-
     const hashedPassword = await bcrypt.hash(password, 10);
     await connection.query(
       'INSERT INTO users (name, email, password, role, department, year_of_passing, current_position) VALUES (?, ?, ?, ?, ?, ?, ?)',
       [name, email, hashedPassword, role, department || null, year_of_passing || null, current_position || null]
     );
-
     connection.release();
     res.status(201).json({ message: 'User registered successfully' });
   } catch (err) {
@@ -79,26 +89,21 @@ app.post('/register', async (req, res) => {
   }
 });
 
-// 🔐 Login
 app.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body;
-
     const connection = await pool.getConnection();
     const [users] = await connection.query('SELECT * FROM users WHERE email = ?', [email]);
     connection.release();
-
     if (users.length === 0 || !(await bcrypt.compare(password, users[0].password))) {
       return res.status(401).json({ message: 'Invalid credentials' });
     }
-
     const user = users[0];
     const token = jwt.sign(
       { user_id: user.user_id, name: user.name, role: user.role },
       JWT_SECRET,
       { expiresIn: '1h' }
     );
-
     res.json({
       token,
       user: {
@@ -114,7 +119,6 @@ app.post('/login', async (req, res) => {
   }
 });
 
-// 🧑‍🎓 Get alumni directory
 app.get('/alumni', authenticateJWT, async (req, res) => {
   try {
     const connection = await pool.getConnection();
@@ -129,7 +133,6 @@ app.get('/alumni', authenticateJWT, async (req, res) => {
   }
 });
 
-// 📅 Get meetings
 app.get('/meetings', authenticateJWT, async (req, res) => {
   try {
     const connection = await pool.getConnection();
@@ -142,10 +145,8 @@ app.get('/meetings', authenticateJWT, async (req, res) => {
   }
 });
 
-// 📅 Create meeting
 app.post('/meetings', authenticateJWT, async (req, res) => {
   const { title, description, start_date, end_date } = req.body;
-
   try {
     const connection = await pool.getConnection();
     await connection.query(
@@ -161,10 +162,8 @@ app.post('/meetings', authenticateJWT, async (req, res) => {
   }
 });
 
-// 🎓 Post scholarship
 app.post('/api/scholarships', async (req, res) => {
   const { title, description, eligibility, deadline, amount, created_by } = req.body;
-
   try {
     const connection = await pool.getConnection();
     await connection.query(
@@ -179,7 +178,6 @@ app.post('/api/scholarships', async (req, res) => {
   }
 });
 
-// 📜 Get all scholarships
 app.get('/api/scholarships', async (req, res) => {
   try {
     const connection = await pool.getConnection();
@@ -197,43 +195,37 @@ app.get('/api/scholarships', async (req, res) => {
   }
 });
 
-// 📝 Apply for a scholarship
-app.post('/api/apply', async (req, res) => {
+app.post('/api/apply', upload.single('document'), async (req, res) => {
   const { student_id, scholarship_id } = req.body;
-
+  const documentPath = req.file ? req.file.filename : null;
   try {
     const connection = await pool.getConnection();
     const [existing] = await connection.query(
       'SELECT * FROM applications WHERE student_id = ? AND scholarship_id = ?',
       [student_id, scholarship_id]
     );
-
     if (existing.length > 0) {
       connection.release();
-      return res.status(400).json({ message: 'Already applied' });
+      return res.status(400).json({ message: "Already applied" });
     }
-
     await connection.query(
-      'INSERT INTO applications (student_id, scholarship_id) VALUES (?, ?)',
-      [student_id, scholarship_id]
+      'INSERT INTO applications (student_id, scholarship_id, status, document_path) VALUES (?, ?, ?, ?)',
+      [student_id, scholarship_id, 'pending', documentPath]
     );
-
     connection.release();
-    res.status(201).json({ message: 'Application submitted' });
+    res.status(201).json({ message: "Application submitted with document" });
   } catch (err) {
-    console.error('Application error:', err);
-    res.status(500).json({ message: 'Error applying to scholarship' });
+    console.error("Error applying:", err);
+    res.status(500).json({ message: "Error applying to scholarship" });
   }
 });
 
-// 📥 View applications for a scholarship
 app.get('/api/applications/:scholarshipId', async (req, res) => {
   const { scholarshipId } = req.params;
-
   try {
     const connection = await pool.getConnection();
     const [results] = await connection.query(`
-      SELECT a.id, u.name AS student_name, u.email, a.status
+      SELECT a.id, u.name AS student_name, u.email, a.status, a.document_path
       FROM applications a
       JOIN users u ON a.student_id = u.user_id
       WHERE a.scholarship_id = ?
@@ -246,11 +238,9 @@ app.get('/api/applications/:scholarshipId', async (req, res) => {
   }
 });
 
-// ✅ Update application status
 app.post('/api/applications/:id/status', async (req, res) => {
   const { id } = req.params;
   const { status } = req.body;
-
   try {
     const connection = await pool.getConnection();
     await connection.query(
@@ -264,35 +254,14 @@ app.post('/api/applications/:id/status', async (req, res) => {
     res.status(500).json({ message: 'Error updating status' });
   }
 });
-app.post('/api/scholarships', async (req, res) => {
-  const { title, description, eligibility, deadline, amount, created_by } = req.body;
 
-  console.log("Received Scholarship:", req.body); // Add this to debug
-
-  try {
-    const connection = await pool.getConnection();
-    await connection.query(
-      'INSERT INTO scholarships (title, description, eligibility, deadline, amount, created_by) VALUES (?, ?, ?, ?, ?, ?)',
-      [title, description, eligibility, deadline, amount, created_by]
-    );
-    connection.release();
-    res.status(201).json({ message: 'Scholarship posted successfully' });
-  } catch (err) {
-    console.error('Scholarship error:', err);
-    res.status(500).json({ message: 'Database error' });
-  }
-});
-
-// GET all applications for scholarships created by this alumni
 app.get('/api/my-scholarships/:alumniId', async (req, res) => {
   const { alumniId } = req.params;
-
   try {
     const connection = await pool.getConnection();
-
     const [applications] = await connection.query(`
       SELECT 
-        a.id, a.status,
+        a.id, a.status, a.document_path,
         u.name AS student_name, u.email,
         s.title AS scholarship_title
       FROM applications a
@@ -300,7 +269,6 @@ app.get('/api/my-scholarships/:alumniId', async (req, res) => {
       JOIN scholarships s ON a.scholarship_id = s.id
       WHERE s.created_by = ?
     `, [alumniId]);
-
     connection.release();
     res.json(applications);
   } catch (err) {
@@ -311,16 +279,13 @@ app.get('/api/my-scholarships/:alumniId', async (req, res) => {
 
 app.get('/api/my-applications/:studentId', async (req, res) => {
   const studentId = req.params.studentId;
-
   try {
     const connection = await pool.getConnection();
-
     const [applications] = await connection.query(`
       SELECT a.scholarship_id, a.status
       FROM applications a
       WHERE a.student_id = ?
     `, [studentId]);
-
     connection.release();
     res.json(applications);
   } catch (err) {
@@ -329,14 +294,11 @@ app.get('/api/my-applications/:studentId', async (req, res) => {
   }
 });
 
-
-// Start server after DB connection check
 (async () => {
   try {
     const connection = await pool.getConnection();
     console.log('✅ Connected to MySQL database!');
     connection.release();
-
     app.listen(PORT, () => {
       console.log(`🚀 Server running at http://localhost:${PORT}`);
     });
