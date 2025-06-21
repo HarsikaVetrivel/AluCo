@@ -7,11 +7,11 @@ const bcrypt = require('bcrypt');
 
 const app = express();
 const PORT = 3001;
-const JWT_SECRET = 'your-secret-key-here';  // You can change this secret key
+const JWT_SECRET = 'your-secret-key-here';
 
-// Middleware setup
+// Middleware
 app.use(cors({
-  origin: 'http://localhost:5173',  // Frontend React app URL
+  origin: 'http://localhost:5173',
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
@@ -22,17 +22,16 @@ app.use(bodyParser.json());
 const pool = mysql.createPool({
   host: 'localhost',
   user: 'root',
-  password: 'LearnGrow123$', // Use your MySQL password
+  password: '',
+  port: 3307,
   database: 'alumni_connect',
 });
 
 // JWT Middleware
 const authenticateJWT = (req, res, next) => {
   const authHeader = req.headers.authorization;
-
   if (authHeader) {
     const token = authHeader.split(' ')[1];
-
     jwt.verify(token, JWT_SECRET, (err, user) => {
       if (err) return res.sendStatus(403);
       req.user = user;
@@ -43,88 +42,57 @@ const authenticateJWT = (req, res, next) => {
   }
 };
 
-// ➤ Get Alumni Directory
-app.get('/alumni', authenticateJWT, async (req, res) => {
-  try {
-    const connection = await pool.getConnection();
-    const [alumni] = await connection.query(
-      'SELECT user_id, name, department, year_of_passing, current_position, email FROM users WHERE role = "alumni"'
-    );
-    connection.release();
-    res.json(alumni);
-  } catch (error) {
-    console.error('Error fetching alumni:', error);
-    res.status(500).json({ message: 'Error fetching alumni data' });
-  }
-});
+// === Routes ===
 
-
-// ➤ TEST Route
+// 🌐 Test route
 app.get('/', (req, res) => {
   res.send('🌟 Server is running fine!');
 });
 
-// ➤ Register Route
+// 🧑‍💼 Register
 app.post('/register', async (req, res) => {
   try {
     const { name, email, password, role, department, year_of_passing, current_position } = req.body;
 
     if (!name || !email || !password || !role) {
-      return res.status(400).json({ message: 'Name, email, password, and role are required' });
+      return res.status(400).json({ message: 'Missing required fields' });
     }
 
     const connection = await pool.getConnection();
-
-    // Check if user already exists
     const [existingUsers] = await connection.query('SELECT * FROM users WHERE email = ?', [email]);
     if (existingUsers.length > 0) {
       connection.release();
-      return res.status(409).json({ message: 'User already exists with this email' });
+      return res.status(409).json({ message: 'User already exists' });
     }
 
-    // Hash password
     const hashedPassword = await bcrypt.hash(password, 10);
-
-    // Insert new user
     await connection.query(
       'INSERT INTO users (name, email, password, role, department, year_of_passing, current_position) VALUES (?, ?, ?, ?, ?, ?, ?)',
       [name, email, hashedPassword, role, department || null, year_of_passing || null, current_position || null]
     );
 
     connection.release();
-
     res.status(201).json({ message: 'User registered successfully' });
-  } catch (error) {
-    console.error('Registration error:', error);
+  } catch (err) {
+    console.error('Registration error:', err);
     res.status(500).json({ message: 'Registration failed' });
   }
 });
 
-
-// ➤ Login Route
+// 🔐 Login
 app.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body;
-
-    if (!email || !password) {
-      return res.status(400).json({ message: 'Email and password are required' });
-    }
 
     const connection = await pool.getConnection();
     const [users] = await connection.query('SELECT * FROM users WHERE email = ?', [email]);
     connection.release();
 
-    if (users.length === 0) {
+    if (users.length === 0 || !(await bcrypt.compare(password, users[0].password))) {
       return res.status(401).json({ message: 'Invalid credentials' });
     }
 
     const user = users[0];
-    const passwordMatch = await bcrypt.compare(password, user.password);
-
-    if (!passwordMatch) {
-      return res.status(401).json({ message: 'Invalid credentials' });
-    }
-
     const token = jwt.sign(
       { user_id: user.user_id, name: user.name, role: user.role },
       JWT_SECRET,
@@ -140,64 +108,229 @@ app.post('/login', async (req, res) => {
         role: user.role
       }
     });
-  } catch (error) {
-    console.error('Login error:', error);
+  } catch (err) {
+    console.error('Login error:', err);
     res.status(500).json({ message: 'Login failed' });
   }
 });
 
-// ➤ Get Meetings
+// 🧑‍🎓 Get alumni directory
+app.get('/alumni', authenticateJWT, async (req, res) => {
+  try {
+    const connection = await pool.getConnection();
+    const [alumni] = await connection.query(
+      'SELECT user_id, name, department, year_of_passing, current_position, email FROM users WHERE role = "alumni"'
+    );
+    connection.release();
+    res.json(alumni);
+  } catch (err) {
+    console.error('Error fetching alumni:', err);
+    res.status(500).json({ message: 'Error fetching alumni data' });
+  }
+});
+
+// 📅 Get meetings
 app.get('/meetings', authenticateJWT, async (req, res) => {
   try {
     const connection = await pool.getConnection();
     const [meetings] = await connection.query('SELECT * FROM meetings');
     connection.release();
     res.json(meetings);
-    console.log(meetings);
-  } catch (error) {
-    console.error('Error fetching meetings:', error);
-    res.status(500).json({ message: 'Error fetching meetings data' });
+  } catch (err) {
+    console.error('Error fetching meetings:', err);
+    res.status(500).json({ message: 'Error fetching meetings' });
   }
 });
 
-// ➤ Create Meeting (only for authenticated users)
+// 📅 Create meeting
 app.post('/meetings', authenticateJWT, async (req, res) => {
+  const { title, description, start_date, end_date } = req.body;
+
   try {
-    const { title, description, start_date, end_date } = req.body;
-
-    if (!title || !description || !start_date || !end_date) {
-      return res.status(400).json({ message: 'All fields are required' });
-    }
-
-    console.log('Received meeting details:', { title, description, start_date, end_date });
-
     const connection = await pool.getConnection();
-
-    // Insert the meeting
     await connection.query(
       'INSERT INTO meetings (title, description, start_date, end_date) VALUES (?, ?, ?, ?)',
       [title, description, start_date, end_date]
     );
-
-    // Retrieve the inserted meeting
-    const [rows] = await connection.query(
-      'SELECT * FROM meetings WHERE id = LAST_INSERT_ID()'
-    );
-
+    const [newMeeting] = await connection.query('SELECT * FROM meetings WHERE id = LAST_INSERT_ID()');
     connection.release();
-
-    if (rows.length === 0) {
-      return res.status(500).json({ message: 'Failed to retrieve the newly scheduled meeting' });
-    }
-
-    res.status(201).json(rows[0]);
-  } catch (error) {
-    console.error('Error scheduling meeting:', error.message, error.stack);
-    res.status(500).json({ message: 'Error scheduling meeting', error: error.message });
+    res.status(201).json(newMeeting[0]);
+  } catch (err) {
+    console.error('Meeting creation error:', err);
+    res.status(500).json({ message: 'Error scheduling meeting' });
   }
 });
 
-// ➤ Start Server with DB check
+// 🎓 Post scholarship
+app.post('/api/scholarships', async (req, res) => {
+  const { title, description, eligibility, deadline, amount, created_by } = req.body;
+
+  try {
+    const connection = await pool.getConnection();
+    await connection.query(
+      'INSERT INTO scholarships (title, description, eligibility, deadline, amount, created_by) VALUES (?, ?, ?, ?, ?, ?)',
+      [title, description, eligibility, deadline, amount, created_by]
+    );
+    connection.release();
+    res.status(201).json({ message: 'Scholarship posted successfully' });
+  } catch (err) {
+    console.error('Scholarship error:', err);
+    res.status(500).json({ message: 'Database error' });
+  }
+});
+
+// 📜 Get all scholarships
+app.get('/api/scholarships', async (req, res) => {
+  try {
+    const connection = await pool.getConnection();
+    const [results] = await connection.query(`
+      SELECT s.*, u.name AS alumni_name 
+      FROM scholarships s 
+      JOIN users u ON s.created_by = u.user_id
+      ORDER BY s.deadline DESC
+    `);
+    connection.release();
+    res.json(results);
+  } catch (err) {
+    console.error('Scholarship fetch error:', err);
+    res.status(500).json({ message: 'Error fetching scholarships' });
+  }
+});
+
+// 📝 Apply for a scholarship
+app.post('/api/apply', async (req, res) => {
+  const { student_id, scholarship_id } = req.body;
+
+  try {
+    const connection = await pool.getConnection();
+    const [existing] = await connection.query(
+      'SELECT * FROM applications WHERE student_id = ? AND scholarship_id = ?',
+      [student_id, scholarship_id]
+    );
+
+    if (existing.length > 0) {
+      connection.release();
+      return res.status(400).json({ message: 'Already applied' });
+    }
+
+    await connection.query(
+      'INSERT INTO applications (student_id, scholarship_id) VALUES (?, ?)',
+      [student_id, scholarship_id]
+    );
+
+    connection.release();
+    res.status(201).json({ message: 'Application submitted' });
+  } catch (err) {
+    console.error('Application error:', err);
+    res.status(500).json({ message: 'Error applying to scholarship' });
+  }
+});
+
+// 📥 View applications for a scholarship
+app.get('/api/applications/:scholarshipId', async (req, res) => {
+  const { scholarshipId } = req.params;
+
+  try {
+    const connection = await pool.getConnection();
+    const [results] = await connection.query(`
+      SELECT a.id, u.name AS student_name, u.email, a.status
+      FROM applications a
+      JOIN users u ON a.student_id = u.user_id
+      WHERE a.scholarship_id = ?
+    `, [scholarshipId]);
+    connection.release();
+    res.json(results);
+  } catch (err) {
+    console.error('Fetch applications error:', err);
+    res.status(500).json({ message: 'Error fetching applications' });
+  }
+});
+
+// ✅ Update application status
+app.post('/api/applications/:id/status', async (req, res) => {
+  const { id } = req.params;
+  const { status } = req.body;
+
+  try {
+    const connection = await pool.getConnection();
+    await connection.query(
+      'UPDATE applications SET status = ? WHERE id = ?',
+      [status, id]
+    );
+    connection.release();
+    res.json({ message: 'Status updated' });
+  } catch (err) {
+    console.error('Update status error:', err);
+    res.status(500).json({ message: 'Error updating status' });
+  }
+});
+app.post('/api/scholarships', async (req, res) => {
+  const { title, description, eligibility, deadline, amount, created_by } = req.body;
+
+  console.log("Received Scholarship:", req.body); // Add this to debug
+
+  try {
+    const connection = await pool.getConnection();
+    await connection.query(
+      'INSERT INTO scholarships (title, description, eligibility, deadline, amount, created_by) VALUES (?, ?, ?, ?, ?, ?)',
+      [title, description, eligibility, deadline, amount, created_by]
+    );
+    connection.release();
+    res.status(201).json({ message: 'Scholarship posted successfully' });
+  } catch (err) {
+    console.error('Scholarship error:', err);
+    res.status(500).json({ message: 'Database error' });
+  }
+});
+
+// GET all applications for scholarships created by this alumni
+app.get('/api/my-scholarships/:alumniId', async (req, res) => {
+  const { alumniId } = req.params;
+
+  try {
+    const connection = await pool.getConnection();
+
+    const [applications] = await connection.query(`
+      SELECT 
+        a.id, a.status,
+        u.name AS student_name, u.email,
+        s.title AS scholarship_title
+      FROM applications a
+      JOIN users u ON a.student_id = u.user_id
+      JOIN scholarships s ON a.scholarship_id = s.id
+      WHERE s.created_by = ?
+    `, [alumniId]);
+
+    connection.release();
+    res.json(applications);
+  } catch (err) {
+    console.error("Error fetching applications:", err);
+    res.status(500).json({ message: "Error fetching applications" });
+  }
+});
+
+app.get('/api/my-applications/:studentId', async (req, res) => {
+  const studentId = req.params.studentId;
+
+  try {
+    const connection = await pool.getConnection();
+
+    const [applications] = await connection.query(`
+      SELECT a.scholarship_id, a.status
+      FROM applications a
+      WHERE a.student_id = ?
+    `, [studentId]);
+
+    connection.release();
+    res.json(applications);
+  } catch (err) {
+    console.error("Error fetching student's applications:", err);
+    res.status(500).json({ message: "Failed to fetch applications" });
+  }
+});
+
+
+// Start server after DB connection check
 (async () => {
   try {
     const connection = await pool.getConnection();
@@ -205,10 +338,10 @@ app.post('/meetings', authenticateJWT, async (req, res) => {
     connection.release();
 
     app.listen(PORT, () => {
-      console.log(`🚀 Server running on http://localhost:${PORT}`);
+      console.log(`🚀 Server running at http://localhost:${PORT}`);
     });
   } catch (error) {
-    console.error('❌ Failed to connect to database:', error.message);
+    console.error('❌ Failed to connect to database:', error);
     process.exit(1);
   }
 })();

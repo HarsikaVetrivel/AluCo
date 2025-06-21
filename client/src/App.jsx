@@ -4,6 +4,10 @@ import Login from './components/Login';
 import Register from './components/Register';
 import StudentDashboard from './components/StudentDashboard';
 import AlumniDashboard from './components/AlumniDashboard';
+import PostScholarship from "./components/PostScholarship";
+import ScholarshipList from "./components/ScholarshipList";
+import ManageApplications from "./components/ManageApplications";
+
 import './App.css';
 
 function App() {
@@ -64,6 +68,12 @@ function App() {
                 <Navigate to="/login" replace />
             } 
           />
+
+          <Route path="/post-scholarship" element={<PostScholarship />} />
+          <Route path="/scholarships" element={<ScholarshipList />} />
+
+          
+         <Route path="/manage-applications/:scholarshipId" element={<ManageApplications />} />
         </Routes>
       </div>
     </Router>
